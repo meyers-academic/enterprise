@@ -7,14 +7,6 @@ from tqdm import tqdm
 import functools
 
 
-def latex_float(f):
-    float_str = "{0:.2g}".format(f)
-    if "e" not in float_str:
-        return float_str
-    base, exponent = float_str.split("e")
-    return r"${0} \times 10^{{{1}}}$".format(base, int(exponent))
-
-
 def partition(a, n):
     k = len(a) // n
     return [a[i:i + k] for i in range(0, len(a), k)]
@@ -64,29 +56,37 @@ class OptimalStatistic:
         self.pairs = [(i, j) for i in range(len(pta)) for j in range(i + 1, len(pta))]
         self.angles = np.array([np.arccos(np.dot(self.psrs[i].pos, self.psrs[j].pos)) for (i, j) in self.pairs])
 
+        # get residuals and C matrices
         ys = [sm._residuals for sm in pta] if residuals is None else residuals
         self.Cs = [Cmat(sm, params) for sm in pta]
 
+        # Get GW Fourier basis matrices and spectral model
         self.Fgws = [sm['gw'].get_basis(params) for sm in pta]
         self.spectral_model = np.array(pta[0]['gw'].get_phi({**params, 'gw_log10_A': 0})).copy()
 
+        # Flat spectrum model, but includes necessary normalization
+        # to use units of Agw^2
         self.phimat = pta[0]['gw'].get_phi({**params, 'gw_log10_A': 0, 'gw_gamma': 0})
 
         Nfreqs = int(self.spectral_model.size / 2)
 
+        # Precompute some matrices
         FCys = [C.solve(y, Fgw) for C, y, Fgw in zip(self.Cs, ys, self.Fgws)]
-
         self.FCFs = [C.solve(Fgw, Fgw) for C, Fgw in zip(self.Cs, self.Fgws)]
 
         # a . np.diag(g) . b = a . (g * b) = (a * g) . b
+        # numerator for rho values
         ts = [np.dot(FCys[i], self.spectral_model * FCys[j]) for (i, j) in self.pairs]
         # A . np.diag(g) . B = (A * g) . B
+        # denominator for rho values
         self.bs = [np.trace(np.dot(self.FCFs[i] * self.spectral_model, self.FCFs[j] * self.spectral_model))
                    for (i, j) in self.pairs]
 
+        # Calculate paired correlations and their errors
         self.rhos = np.array(ts) / np.array(self.bs)
         self.sigmas = 1.0 / np.sqrt(self.bs)
 
+        # Calculate the frequency-dependent rho and sigma values
         self.rhos_freqs = np.zeros((Nfreqs, self.rhos.size))
         self.sigmas_freqs = np.zeros((Nfreqs, self.rhos.size))
 
@@ -223,15 +223,6 @@ class OptimalStatistic:
 
     def gw_mean(self):
         return np.array([10**(2.0 * self.params['gw_log10_A'])] * len(self.pairs))
-
-    # @functools.lru_cache
-    # def _tracedot(self, orf, *args):
-    #     ret = np.identity(len(self.spectral_model))
-
-    #     for i, (j, k) in zip(args[::2], args[1::2]):
-    #         ret = np.dot(ret, self.FCFs[i] * self.spectral_model * orf(self.psrs[j].pos, self.psrs[k].pos))
-
-    #     return np.trace(ret)
 
     @functools.lru_cache
     def _tracedot(self, orf, *args):
